@@ -1,0 +1,26 @@
+name: ai-report-assist
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - tesseract
+  - poppler
+  - pip
+  - pip:
+      - fastapi
+      - uvicorn[standard]
+      - python-multipart
+      - jinja2
+      - python-dotenv
+      - pymupdf
+      - pdf2image
+      - pytesseract
+      - presidio-analyzer
+      - presidio-anonymizer
+      - spacy
+      - openai
+      - python-docx
+      - fpdf2
+      - httpx
+      - pytest

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Upload Report – AI Report Assist{% endblock %}
+{% block content %}
+<section class="upload-section">
+    <h1>Upload a Report</h1>
+    <p>Upload a PDF document (native or scanned) to begin the debiasing process.</p>
+
+    <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+        <div class="drop-zone" id="dropZone">
+            <p>Drag & drop a PDF here, or click to select</p>
+            <input type="file" name="file" accept=".pdf" required id="fileInput">
+        </div>
+        <button type="submit" class="btn btn-primary" id="submitBtn">Extract Text</button>
+    </form>
+</section>
+
+<section class="steps-overview">
+    <h2>How It Works</h2>
+    <ol>
+        <li><strong>Extract</strong> — Convert PDF to text (OCR for scanned documents)</li>
+        <li><strong>Detect</strong> — Identify sensitive information locally</li>
+        <li><strong>Mask</strong> — Replace PII with anonymous tokens</li>
+        <li><strong>Debias</strong> — AI reviews and rewrites biased language</li>
+        <li><strong>Unmask</strong> — Restore original identifiers</li>
+        <li><strong>Export</strong> — Download as PDF or DOCX</li>
+    </ol>
+</section>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        fileInput.files = e.dataTransfer.files;
+        if (fileInput.files.length) dropZone.querySelector('p').textContent = fileInput.files[0].name;
+    });
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) dropZone.querySelector('p').textContent = fileInput.files[0].name;
+    });
+</script>
+{% endblock %}
