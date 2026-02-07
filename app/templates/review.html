@@ -9,16 +9,40 @@
         <span class="badge {% if job.is_scanned %}badge-warn{% endif %}">
             {{ 'Scanned (OCR)' if job.is_scanned else 'Native PDF' }}
         </span>
-        <span class="badge badge-status">Status: {{ job.status }}</span>
     </div>
 
+    {# ── Progress Stepper ── #}
+    <div class="stepper">
+        {% for step in steps %}
+        <div class="step step-{{ step.state }}">
+            <div class="step-indicator">
+                {% if step.state == 'completed' %}
+                <svg class="step-check" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                {% elif step.state == 'active' %}
+                <span class="step-dot"></span>
+                {% else %}
+                <span class="step-number">{{ step.number }}</span>
+                {% endif %}
+            </div>
+            <span class="step-label">{{ step.label }}</span>
+            {% if not loop.last %}
+            <div class="step-connector step-connector-{{ step.state }}"></div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    {# ══════════════════════════════════════════ #}
+    {# STATUS: extracted — show text + mask button #}
+    {# ══════════════════════════════════════════ #}
     {% if job.status == 'extracted' %}
     <div class="action-bar">
-        <p>Text has been extracted. Click below to run the debiasing pipeline.</p>
-        <form action="/process/{{ job_id }}" method="post">
-            <button type="submit" class="btn btn-primary" id="processBtn"
-                    onclick="this.disabled=true; this.textContent='Processing...'; this.form.submit();">
-                Run Debiasing Pipeline
+        <h2>Step 1: Review Extracted Text</h2>
+        <p>Text has been extracted from your PDF. Review it below, then click to detect and mask sensitive information.</p>
+        <form action="/mask/{{ job_id }}" method="post" class="action-form">
+            <button type="submit" class="btn btn-primary" id="maskBtn"
+                    onclick="this.disabled=true; this.textContent='Detecting PII & masking...'; this.form.submit();">
+                Detect & Mask PII
             </button>
         </form>
     </div>
@@ -29,6 +53,84 @@
     </div>
     {% endif %}
 
+    {# ══════════════════════════════════════════ #}
+    {# STATUS: masked — show mask results + debias button #}
+    {# ══════════════════════════════════════════ #}
+    {% if job.status == 'masked' %}
+    <div class="action-bar">
+        <h2>Step 2: Review Masked Text</h2>
+        <p>Sensitive information has been masked locally. Review the masked version below — this is what will be sent to the AI. No real PII leaves your machine.</p>
+        <form action="/debias/{{ job_id }}" method="post" class="action-form">
+            <button type="submit" class="btn btn-primary" id="debiasBtn"
+                    onclick="this.disabled=true; this.textContent='Sending to AI for debiasing...'; this.form.submit();">
+                Send for Debiasing
+            </button>
+        </form>
+    </div>
+
+    {# Masked entities table #}
+    {% if job.entities_found %}
+    <h2>Masked Entities ({{ job.entities_found | length }})</h2>
+    <div class="entities-panel">
+        <table>
+            <thead>
+                <tr><th>Type</th><th>Original</th><th>Token</th><th>Confidence</th></tr>
+            </thead>
+            <tbody>
+                {% for e in job.entities_found %}
+                <tr>
+                    <td><code>{{ e.entity_type }}</code></td>
+                    <td>{{ e.original }}</td>
+                    <td><code>{{ e.token }}</code></td>
+                    <td>{{ e.score }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {# Acronyms preserved #}
+    {% if job.acronyms_preserved %}
+    <h2>Acronyms & Abbreviations Preserved ({{ job.acronyms_preserved | length }})</h2>
+    <div class="entities-panel">
+        <table>
+            <thead>
+                <tr><th>Acronym</th><th>Initially Detected As</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+                {% for a in job.acronyms_preserved %}
+                <tr>
+                    <td><strong>{{ a.text }}</strong></td>
+                    <td><code>{{ a.detected_as }}</code></td>
+                    <td>{{ a.reason }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {# Side-by-side: original vs masked #}
+    <div class="comparison">
+        <div class="panel">
+            <h2>Original Text</h2>
+            <div class="text-panel">
+                <pre>{{ job.original_text }}</pre>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>Masked Text <span class="panel-subtitle">sent to AI</span></h2>
+            <div class="text-panel masked-text-panel">
+                <pre>{{ job.masked_text }}</pre>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ══════════════════════════════════════════ #}
+    {# STATUS: processed — show debiased results  #}
+    {# ══════════════════════════════════════════ #}
     {% if job.status == 'processed' %}
     <div class="action-bar">
         <h2>Export</h2>
@@ -38,7 +140,7 @@
         </div>
     </div>
 
-    {# ── Bias Legend (only types actually found) ── #}
+    {# Bias legend (only found types) #}
     {% if job.bias_changes %}
     {% set found_types = job.bias_changes | map(attribute='bias_type') | list | unique | list %}
     <div class="bias-legend">
@@ -59,7 +161,7 @@
     </div>
     {% endif %}
 
-    {# ── Side-by-side Comparison ── #}
+    {# Side-by-side: original highlighted vs debiased highlighted #}
     <div class="comparison">
         <div class="panel">
             <h2>Original Text <span class="panel-subtitle">biased phrases highlighted</span></h2>
@@ -75,7 +177,7 @@
         </div>
     </div>
 
-    {# ── Bias Changes Detail ── #}
+    {# Bias changes detail #}
     {% if job.bias_changes %}
     <h2>Bias Analysis ({{ job.bias_changes | length }} issues found)</h2>
     <div class="bias-changes-panel">
@@ -102,15 +204,7 @@
     </div>
     {% endif %}
 
-    {# ── Changes Summary ── #}
-    {% if job.changes_summary %}
-    <h2>Changes Summary</h2>
-    <div class="summary-panel">
-        <pre>{{ job.changes_summary }}</pre>
-    </div>
-    {% endif %}
-
-    {# ── Masked Entities ── #}
+    {# Masked entities #}
     {% if job.entities_found %}
     <h2>Masked Entities ({{ job.entities_found | length }})</h2>
     <div class="entities-panel">
@@ -132,7 +226,7 @@
     </div>
     {% endif %}
 
-    {# ── Acronyms Preserved ── #}
+    {# Acronyms preserved #}
     {% if job.acronyms_preserved %}
     <h2>Acronyms & Abbreviations Preserved ({{ job.acronyms_preserved | length }})</h2>
     <div class="entities-panel">

@@ -31,6 +31,39 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 # In-memory job store (for MVP – swap for DB/Redis in production)
 jobs: dict[str, dict] = {}
 
+# Pipeline steps for the progress indicator
+PIPELINE_STEPS = [
+    {"key": "upload", "label": "Upload"},
+    {"key": "extract", "label": "Extract Text"},
+    {"key": "mask", "label": "Mask PII"},
+    {"key": "debias", "label": "Debias"},
+    {"key": "review", "label": "Review"},
+    {"key": "export", "label": "Export"},
+]
+
+# Map job status to which step index is active
+STATUS_TO_STEP = {
+    "extracted": 2,   # upload + extract done, mask is next
+    "masked": 3,      # mask done, debias is next
+    "processed": 4,   # debias done, review is active
+    "exported": 5,    # all done
+}
+
+
+def _build_steps(status: str) -> list[dict]:
+    """Build step list with completed/active/pending states."""
+    active_idx = STATUS_TO_STEP.get(status, 0)
+    steps = []
+    for i, step in enumerate(PIPELINE_STEPS):
+        if i < active_idx:
+            state = "completed"
+        elif i == active_idx:
+            state = "active"
+        else:
+            state = "pending"
+        steps.append({**step, "state": state, "number": i + 1})
+    return steps
+
 
 @app.get("/", response_class=HTMLResponse)
 async def upload_page(request: Request):
@@ -71,12 +104,13 @@ async def review_page(request: Request, job_id: str):
         "job_id": job_id,
         "job": job,
         "bias_colors": BIAS_COLORS,
+        "steps": _build_steps(job["status"]),
     })
 
 
-@app.post("/process/{job_id}")
-async def process_report(request: Request, job_id: str):
-    """Run the full pipeline: analyze → mask → debias → unmask."""
+@app.post("/mask/{job_id}")
+async def mask_report(request: Request, job_id: str):
+    """Step 2+3: Analyze PII and mask sensitive information."""
     job = jobs.get(job_id)
     if not job:
         return HTMLResponse("<h1>Job not found</h1>", status_code=404)
@@ -89,14 +123,32 @@ async def process_report(request: Request, job_id: str):
     # Step 3: Mask
     mask_result = mask_text(original_text, analysis.entities)
 
+    job.update({
+        "masked_text": mask_result.masked_text,
+        "entities_found": mask_result.entities_found,
+        "entity_mapping": mask_result.entity_mapping,
+        "acronyms_preserved": analysis.acronyms_preserved,
+        "status": "masked",
+    })
+
+    return RedirectResponse(url=f"/review/{job_id}", status_code=303)
+
+
+@app.post("/debias/{job_id}")
+async def debias_report(request: Request, job_id: str):
+    """Step 4+5: Send masked text to AI for debiasing, then unmask."""
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "masked":
+        return HTMLResponse("<h1>Job not found or not yet masked</h1>", status_code=404)
+
     # Step 4: Debias (cloud – only masked text sent)
-    debias_result = debias_text(mask_result.masked_text)
+    debias_result = debias_text(job["masked_text"])
 
     # Step 5: Unmask
-    unmask_result = unmask_text(debias_result.debiased_text, mask_result.entity_mapping)
+    unmask_result = unmask_text(debias_result.debiased_text, job["entity_mapping"])
 
     # Build highlighted HTML for side-by-side view
-    original_highlighted = highlight_original(original_text, debias_result.changes)
+    original_highlighted = highlight_original(job["original_text"], debias_result.changes)
     debiased_highlighted = highlight_debiased(unmask_result.final_text, debias_result.changes)
 
     # Serialize bias changes for the template
@@ -111,10 +163,6 @@ async def process_report(request: Request, job_id: str):
     ]
 
     job.update({
-        "masked_text": mask_result.masked_text,
-        "entities_found": mask_result.entities_found,
-        "entity_mapping": mask_result.entity_mapping,
-        "acronyms_preserved": analysis.acronyms_preserved,
         "debiased_masked": debias_result.debiased_text,
         "debiased_text": unmask_result.final_text,
         "original_highlighted": original_highlighted,
@@ -163,7 +211,6 @@ async def get_job_status(job_id: str):
     job = jobs.get(job_id)
     if not job:
         return {"error": "not found"}
-    # Return a serializable subset
     return {
         "job_id": job_id,
         "filename": job.get("filename"),

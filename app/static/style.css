@@ -91,8 +91,97 @@ footer {
 .meta {
     display: flex;
     gap: 0.5rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
     flex-wrap: wrap;
+}
+
+/* ── Progress Stepper ── */
+.stepper {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    padding: 1.25rem 1.5rem;
+    background: #fff;
+    border-radius: 10px;
+    border: 1px solid #e0e0e0;
+}
+.step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    flex: 1;
+}
+.step-indicator {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    transition: all 0.3s;
+}
+.step-completed .step-indicator {
+    background: #27ae60;
+    color: #fff;
+}
+.step-active .step-indicator {
+    background: #4a6cf7;
+    color: #fff;
+    box-shadow: 0 0 0 4px #4a6cf733;
+}
+.step-pending .step-indicator {
+    background: #e8e8e8;
+    color: #999;
+}
+.step-check {
+    width: 18px;
+    height: 18px;
+}
+.step-dot {
+    width: 10px;
+    height: 10px;
+    background: #fff;
+    border-radius: 50%;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+.step-number { font-size: 0.8rem; }
+.step-label {
+    font-size: 0.75rem;
+    color: #666;
+    text-align: center;
+    white-space: nowrap;
+}
+.step-completed .step-label { color: #27ae60; font-weight: 500; }
+.step-active .step-label { color: #4a6cf7; font-weight: 600; }
+.step-pending .step-label { color: #bbb; }
+
+/* Connector line between steps */
+.step-connector {
+    position: absolute;
+    top: 18px;
+    left: calc(50% + 22px);
+    width: calc(100% - 44px);
+    height: 2px;
+    background: #e0e0e0;
+}
+.step-connector-completed { background: #27ae60; }
+.step-connector-active { background: linear-gradient(to right, #4a6cf7, #e0e0e0); }
+
+/* Action bar tweaks */
+.action-form { margin-top: 0.75rem; }
+
+/* Masked text panel */
+.masked-text-panel {
+    background: #fffef5;
+    border-color: #f0e68c;
 }
 .badge {
     display: inline-block;
