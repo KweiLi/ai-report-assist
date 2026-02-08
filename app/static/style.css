@@ -84,6 +84,11 @@ footer {
 }
 .btn-primary:hover { background: #3a5ce5; }
 .btn-primary:disabled { background: #999; cursor: not-allowed; }
+.btn-secondary {
+    background: #6c757d;
+    color: #fff;
+}
+.btn-secondary:hover { background: #5a6268; }
 
 /* Review */
 .review-section h1 { margin-bottom: 0.5rem; }

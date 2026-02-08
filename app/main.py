@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.config import UPLOAD_DIR
 from app.pipeline.analyzer import analyze_text
 from app.pipeline.debiaser import BIAS_COLORS, debias_text, highlight_debiased, highlight_original
-from app.pipeline.exporter import export_docx, export_pdf
+from app.pipeline.exporter import export_docx, export_formatted_pdf, export_pdf
 from app.pipeline.extractor import extract_text
 from app.pipeline.masker import mask_text
 from app.pipeline.unmasker import unmask_text
@@ -187,15 +187,26 @@ async def export_report(job_id: str, format: str = "pdf"):
     title = f"Debiased Report - {job['filename']}"
     entities_found = job.get("entities_found")
     changes_summary = job.get("changes_summary")
+    bias_changes = job.get("bias_changes")
     acronyms_preserved = job.get("acronyms_preserved")
 
-    if format == "docx":
+    if format == "formatted_pdf":
+        output_path = UPLOAD_DIR / f"{job_id}_formatted.pdf"
+        export_formatted_pdf(
+            original_pdf_path=job["file_path"],
+            bias_changes=bias_changes or [],
+            entity_mapping=job.get("entity_mapping", {}),
+            output_path=output_path,
+            is_scanned=job.get("is_scanned", False),
+        )
+        media_type = "application/pdf"
+    elif format == "docx":
         output_path = UPLOAD_DIR / f"{job_id}_debiased.docx"
-        export_docx(text, output_path, title=title, entities_found=entities_found, changes_summary=changes_summary, acronyms_preserved=acronyms_preserved)
+        export_docx(text, output_path, title=title, entities_found=entities_found, changes_summary=changes_summary, bias_changes=bias_changes, acronyms_preserved=acronyms_preserved)
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     else:
         output_path = UPLOAD_DIR / f"{job_id}_debiased.pdf"
-        export_pdf(text, output_path, title=title, entities_found=entities_found, changes_summary=changes_summary, acronyms_preserved=acronyms_preserved)
+        export_pdf(text, output_path, title=title, entities_found=entities_found, changes_summary=changes_summary, bias_changes=bias_changes, acronyms_preserved=acronyms_preserved)
         media_type = "application/pdf"
 
     return FileResponse(

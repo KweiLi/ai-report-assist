@@ -17,6 +17,13 @@ class UnmaskResult:
     unresolved_tokens: list[str] = field(default_factory=list)
 
 
+def unmask_phrase(phrase: str, entity_mapping: dict[str, str]) -> str:
+    """Unmask entity tokens in a single phrase."""
+    for token, original in entity_mapping.items():
+        phrase = phrase.replace(token, original)
+    return phrase
+
+
 def unmask_text(masked_text: str, entity_mapping: dict[str, str]) -> UnmaskResult:
     """Replace all tokens back to their original values using the mapping."""
     result = UnmaskResult()

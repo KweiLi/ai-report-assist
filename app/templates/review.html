@@ -135,8 +135,9 @@
     <div class="action-bar">
         <h2>Export</h2>
         <div class="export-form">
-            <a href="/export/{{ job_id }}?format=pdf" class="btn btn-primary" download>Download PDF</a>
-            <a href="/export/{{ job_id }}?format=docx" class="btn btn-primary" download>Download DOCX</a>
+            <a href="/export/{{ job_id }}?format=formatted_pdf" class="btn btn-primary" download>Download Formatted PDF</a>
+            <a href="/export/{{ job_id }}?format=pdf" class="btn btn-secondary" download>Download Analysis PDF</a>
+            <a href="/export/{{ job_id }}?format=docx" class="btn btn-secondary" download>Download Analysis DOCX</a>
         </div>
     </div>
 
