@@ -567,69 +567,322 @@ def _truncate(text: str, max_len: int) -> str:
 # ── Formatted PDF export (preserve original layout) ──
 
 
-def _map_to_base14(flags: int) -> str:
-    """Map PyMuPDF span flags to the best-matching base14 font name.
+def _ocr_page_blocks(page: fitz.Page, dpi: int = 300) -> list[dict]:
+    """OCR a single page and return text blocks with bounding rects.
 
-    Span flag bits: 1=italic, 2=serif, 3=monospaced, 4=bold.
+    Each block dict has: block_num, text, rect (fitz.Rect in PDF points),
+    word_rects (list of per-word fitz.Rect), avg_word_height (PDF points).
     """
-    is_bold = bool(flags & (1 << 4))
-    is_italic = bool(flags & (1 << 1))
-    is_serif = bool(flags & (1 << 2))
-    is_mono = bool(flags & (1 << 3))
+    import pytesseract
+    from PIL import Image
+    from pytesseract import Output
 
-    if is_mono:
-        if is_bold and is_italic:
-            return "cobi"
-        if is_bold:
-            return "cobo"
-        if is_italic:
-            return "coit"
-        return "cour"
-    if is_serif:
-        if is_bold and is_italic:
-            return "tibi"
-        if is_bold:
-            return "tibo"
-        if is_italic:
-            return "tiit"
-        return "tiro"
-    if is_bold and is_italic:
-        return "hebi"
-    if is_bold:
-        return "hebo"
-    if is_italic:
-        return "heit"
-    return "helv"
+    scale = 72.0 / dpi
+    pix = page.get_pixmap(dpi=dpi)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    ocr_data = pytesseract.image_to_data(img, output_type=Output.DICT)
 
-
-def _get_font_info(
-    page_dict: dict, rect: fitz.Rect
-) -> tuple[str, float, tuple[float, float, float]]:
-    """Find the font name, size, and colour of text nearest to a rect.
-
-    Returns (base14_fontname, fontsize, (r, g, b)) with 0-1 float colours.
-    """
-    target_y = (rect.y0 + rect.y1) / 2
-    target_x = rect.x0
-    best = None
-    best_dist = float("inf")
-
-    for block in page_dict.get("blocks", []):
-        if block.get("type") != 0:
+    # Group word indices by block_num
+    block_indices: dict[int, list[int]] = {}
+    for i in range(len(ocr_data["text"])):
+        if not ocr_data["text"][i].strip():
             continue
-        for line in block.get("lines", []):
-            for span in line.get("spans", []):
-                bbox = span["bbox"]
-                dy = abs((bbox[1] + bbox[3]) / 2 - target_y)
-                dx = abs(bbox[0] - target_x)
-                dist = dy * 2 + dx
-                if dist < best_dist:
-                    best_dist = dist
-                    c = span.get("color", 0)
-                    color = (((c >> 16) & 0xFF) / 255, ((c >> 8) & 0xFF) / 255, (c & 0xFF) / 255)
-                    best = (_map_to_base14(span.get("flags", 0)), span["size"], color)
+        block_indices.setdefault(ocr_data["block_num"][i], []).append(i)
 
-    return best or ("helv", 11, (0, 0, 0))
+    blocks: list[dict] = []
+    for bnum, indices in block_indices.items():
+        word_rects = []
+        for i in indices:
+            word_rects.append(fitz.Rect(
+                ocr_data["left"][i] * scale,
+                ocr_data["top"][i] * scale,
+                (ocr_data["left"][i] + ocr_data["width"][i]) * scale,
+                (ocr_data["top"][i] + ocr_data["height"][i]) * scale,
+            ))
+        block_rect = fitz.Rect(
+            min(r.x0 for r in word_rects),
+            min(r.y0 for r in word_rects),
+            max(r.x1 for r in word_rects),
+            max(r.y1 for r in word_rects),
+        )
+        avg_h = sum(r.height for r in word_rects) / len(word_rects)
+        blocks.append({
+            "block_num": bnum,
+            "text": " ".join(ocr_data["text"][i] for i in indices),
+            "rect": block_rect,
+            "word_rects": word_rects,
+            "avg_word_height": avg_h,
+        })
+
+    # Sort top-to-bottom, then left-to-right
+    blocks.sort(key=lambda b: (b["rect"].y0, b["rect"].x0))
+    return blocks
+
+
+def _normalize_ws(text: str) -> str:
+    """Collapse all whitespace (spaces, newlines, tabs) to single spaces."""
+    return " ".join(text.split())
+
+
+def _merge_blocks(blocks: list[dict]) -> dict:
+    """Merge multiple OCR blocks into a single virtual block."""
+    all_word_rects: list[fitz.Rect] = []
+    for b in blocks:
+        all_word_rects.extend(b["word_rects"])
+    return {
+        "block_num": blocks[0]["block_num"],
+        "text": " ".join(b["text"] for b in blocks),
+        "rect": fitz.Rect(
+            min(r.x0 for r in all_word_rects),
+            min(r.y0 for r in all_word_rects),
+            max(r.x1 for r in all_word_rects),
+            max(r.y1 for r in all_word_rects),
+        ),
+        "word_rects": all_word_rects,
+        "avg_word_height": sum(r.height for r in all_word_rects) / len(all_word_rects),
+    }
+
+
+def _estimate_textbox_height(num_lines: int, fontsize: float) -> float:
+    """Estimate the height needed by insert_textbox for N lines of text.
+
+    Measured from PyMuPDF's actual rendering behaviour:
+      first line height  ≈ fontsize × 1.7
+      subsequent spacing ≈ fontsize × 1.4
+    """
+    if num_lines <= 0:
+        return 0
+    return fontsize * 1.7 + max(0, num_lines - 1) * fontsize * 1.4
+
+
+def _whiteout_and_render(
+    page: fitz.Page,
+    block: dict,
+    text: str,
+    fontname: str = "helv",
+) -> None:
+    """White out a block area and render replacement text.
+
+    If the replacement text is longer than the original, the render
+    rectangle is **extended downward** so all text is visible at a
+    readable font size.  The extended area is also whited-out.
+    """
+    rect = block["rect"]
+    margin = 2
+
+    # Font size: derived from OCR measurement, never below 7 pt
+    fontsize = max(block["avg_word_height"] * 0.80, 7)
+
+    # If the text is much longer, allow a *small* font reduction (down to 7 pt)
+    # but primarily rely on extending the rect.
+    #
+    # PyMuPDF insert_textbox actual line heights (measured):
+    #   first line  ≈ fontsize × 1.7
+    #   subsequent  ≈ fontsize × 1.4
+    # Using these values (not the old 1.3) to correctly size the render rect.
+    wrapped = _wrap_text(text.strip(), rect.width, fontname, fontsize)
+    needed = _estimate_textbox_height(len(wrapped), fontsize)
+
+    if needed > rect.height * 1.1 and fontsize > 7:
+        # Try one modest reduction (max 20 %) before extending
+        test_fs = max(fontsize * 0.80, 7)
+        test_wrap = _wrap_text(text.strip(), rect.width, fontname, test_fs)
+        test_needed = _estimate_textbox_height(len(test_wrap), test_fs)
+        if test_needed <= rect.height * 1.1:
+            fontsize = test_fs
+            wrapped = test_wrap
+            needed = test_needed
+
+    # Determine render rect — extend downward if necessary
+    # Add a small buffer (4pt) to prevent bottom-line clipping
+    render_rect = fitz.Rect(
+        rect.x0, rect.y0, rect.x1, max(rect.y1, rect.y0 + needed + 4),
+    )
+
+    # White out the entire area (original block + any extension)
+    clean = fitz.Rect(
+        render_rect.x0 - margin, render_rect.y0 - margin,
+        render_rect.x1 + margin, render_rect.y1 + margin,
+    )
+    page.draw_rect(clean, color=None, fill=(1, 1, 1))
+
+    # Render the debiased text
+    rc = page.insert_textbox(
+        render_rect, text.strip(),
+        fontsize=fontsize, fontname=fontname, color=(0, 0, 0),
+    )
+
+    logger.info(
+        "Rendered %d chars in %.0fx%.0f rect (fontsize=%.1f, extended=%s, overflow=%s)",
+        len(text), render_rect.width, render_rect.height,
+        fontsize, render_rect.height > rect.height + 1, rc < 0,
+    )
+
+
+def _wrap_text(
+    text: str, max_width: float, fontname: str, fontsize: float
+) -> list[str]:
+    """Word-wrap text into lines that fit within max_width."""
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+        words = paragraph.split()
+        current = ""
+        for word in words:
+            test = current + (" " if current else "") + word
+            w = fitz.get_text_length(test, fontname=fontname, fontsize=fontsize)
+            if w <= max_width:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+    return lines
+
+
+def _replace_affected_blocks(
+    doc: fitz.Document,
+    changes: list[tuple[str, str]],
+    page_texts: list[str] | None = None,
+) -> None:
+    """Block-level replacement using **stored text** for content and OCR
+    only for spatial positions.
+
+    Approach — paragraph-first:
+    1. Split the stored page text into paragraphs.
+    2. For each paragraph, apply bias changes.  Skip unchanged paragraphs.
+    3. For each changed paragraph, find the OCR blocks that correspond to
+       it using word-set overlap (robust to OCR character errors).
+    4. Merge matching blocks, white-out, render the debiased **stored**
+       paragraph.  No OCR text is ever rendered, so character errors like
+       S→$ or I→| are avoided.
+    """
+    import re
+
+    for page_idx, page in enumerate(doc):
+        stored = (
+            page_texts[page_idx]
+            if page_texts and page_idx < len(page_texts)
+            else None
+        )
+        if not stored:
+            continue
+
+        # Quick check: skip pages where no change phrase is present
+        if not any(orig in stored for orig, _ in changes):
+            continue
+
+        blocks = _ocr_page_blocks(page)
+        if not blocks:
+            continue
+
+        # ── Split stored text into paragraphs ──
+        # First split on blank lines (double newlines)
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", stored) if p.strip()]
+        # If the text uses single newlines only, fall back to line-based split
+        # but merge consecutive short lines into paragraphs (min 80 chars)
+        if len(paragraphs) <= 1:
+            lines = [ln.strip() for ln in stored.split("\n") if ln.strip()]
+            paragraphs = []
+            current: list[str] = []
+            for ln in lines:
+                current.append(ln)
+                if len(" ".join(current)) >= 80:
+                    paragraphs.append(" ".join(current))
+                    current = []
+            if current:
+                paragraphs.append(" ".join(current))
+
+        # Separate leading labels (e.g. "NARRATIVE:") from content.
+        # If a paragraph starts with a single-word label line followed
+        # by the actual text, strip the label so we don't duplicate it
+        # (the label is already visible in the original image).
+        cleaned: list[str] = []
+        for para in paragraphs:
+            lines = para.split("\n", 1)
+            if len(lines) == 2 and re.match(r"^[A-Z ]+:$", lines[0].strip()):
+                cleaned.append(lines[1].strip())
+            else:
+                cleaned.append(para)
+        paragraphs = cleaned
+
+        # ── Identify affected paragraphs ──
+        affected: list[tuple[str, str]] = []  # (original, debiased)
+        for para in paragraphs:
+            debiased = para
+            changed = False
+            for orig, repl in changes:
+                if orig in debiased:
+                    debiased = debiased.replace(orig, repl)
+                    changed = True
+            if changed:
+                affected.append((para, debiased))
+
+        if not affected:
+            continue
+
+        # ── Pre-compute normalised word sets for all blocks ──
+        block_word_sets: list[set[str]] = []
+        for block in blocks:
+            block_word_sets.append(set(_normalize_ws(block["text"]).lower().split()))
+
+        replaced_block_idx: set[int] = set()
+
+        # ── For each affected paragraph, find matching OCR blocks ──
+        for para, debiased_para in affected:
+            para_words = set(_normalize_ws(para).lower().split())
+            if not para_words:
+                continue
+
+            # Find blocks whose words overlap significantly with the paragraph.
+            # Require BOTH a minimum percentage AND a minimum absolute count
+            # to prevent small form-field blocks (1–4 words) from matching
+            # a large narrative paragraph on common words like "S1", "Main", etc.
+            matching_bis: list[int] = []
+            for bi, bw_set in enumerate(block_word_sets):
+                if bi in replaced_block_idx or not bw_set:
+                    continue
+                matching_count = len(bw_set & para_words)
+                overlap = matching_count / len(bw_set)
+                if overlap >= 0.4 and matching_count >= 5:
+                    matching_bis.append(bi)
+
+            # Fallback: find blocks containing a bias phrase via OCR text
+            if not matching_bis:
+                for bi, block in enumerate(blocks):
+                    if bi in replaced_block_idx:
+                        continue
+                    bn = _normalize_ws(block["text"])
+                    for orig, repl in changes:
+                        if _normalize_ws(orig) in bn:
+                            matching_bis.append(bi)
+                            break
+
+            if not matching_bis:
+                logger.warning(
+                    "Page %d: no OCR blocks matched paragraph: %.60s",
+                    page.number, para,
+                )
+                continue
+
+            # Merge matching blocks and render
+            matched_blocks = [blocks[bi] for bi in matching_bis]
+            merged = (
+                _merge_blocks(matched_blocks) if len(matched_blocks) > 1 else matched_blocks[0]
+            )
+            _whiteout_and_render(page, merged, debiased_para)
+
+            for bi in matching_bis:
+                replaced_block_idx.add(bi)
+
+            logger.info(
+                "Page %d: replaced %d block(s) for paragraph (%.60s)",
+                page.number, len(matching_bis), para,
+            )
 
 
 def _export_via_form_fields(
@@ -659,72 +912,13 @@ def _export_via_form_fields(
     return updated
 
 
-def _export_via_text_replacement(
-    doc: fitz.Document, changes: list[tuple[str, str]]
-) -> None:
-    """Apply corrections by surgically replacing individual phrases in the PDF.
-
-    For each biased phrase: finds its exact position with search_for(),
-    redacts just that small rect (preserving all surrounding content),
-    then inserts the replacement text at the same baseline position.
-    """
-    for page in doc:
-        page_dict = page.get_text("dict")
-        pending: list[tuple[fitz.Rect, str, str, float, tuple]] = []
-
-        for original, replacement in changes:
-            rects = page.search_for(original)
-            if not rects:
-                continue
-
-            for rect in rects:
-                fontname, fontsize, color = _get_font_info(page_dict, rect)
-                page.add_redact_annot(rect)
-                pending.append((rect, replacement, fontname, fontsize, color))
-
-            logger.debug(
-                "Found '%s' → '%s' (%d locations on page %d)",
-                original, replacement, len(rects), page.number,
-            )
-
-        if not pending:
-            continue
-
-        # Remove only the text — preserve all graphics (form borders, lines)
-        page.apply_redactions(
-            images=fitz.PDF_REDACT_IMAGE_NONE,
-            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
-        )
-
-        # Insert replacement text at the original baseline position
-        for rect, replacement, fontname, fontsize, color in pending:
-            # Shrink only if replacement is wider than the available space
-            text_width = fitz.get_text_length(replacement, fontname=fontname, fontsize=fontsize)
-            if text_width > rect.width:
-                # Extend rect rightward (up to page margin) before shrinking
-                max_width = page.rect.width - 36 - rect.x0
-                rect = fitz.Rect(rect.x0, rect.y0, rect.x0 + max(rect.width, max_width), rect.y1)
-                text_width = fitz.get_text_length(replacement, fontname=fontname, fontsize=fontsize)
-                if text_width > rect.width:
-                    fontsize = fontsize * (rect.width / text_width) * 0.98
-
-            baseline_y = rect.y0 + fontsize * 0.88
-            page.insert_text(
-                (rect.x0, baseline_y), replacement,
-                fontname=fontname, fontsize=fontsize, color=color,
-            )
-
-
 def _export_formatted_native(
-    doc: fitz.Document, bias_changes: list[dict], entity_mapping: dict[str, str]
+    doc: fitz.Document,
+    bias_changes: list[dict],
+    entity_mapping: dict[str, str],
+    page_texts: list[str] | None = None,
 ) -> None:
-    """Apply bias corrections to a native PDF, preserving form layout.
-
-    Strategy:
-    1. If the PDF has fillable form fields → update field values directly.
-    2. Otherwise → surgically replace individual phrases in-place, using
-       small per-phrase redactions that don't disturb surrounding content.
-    """
+    """Apply bias corrections to a PDF by replacing the full narrative section."""
     changes = [
         (
             unmask_phrase(c["original_phrase"], entity_mapping),
@@ -733,9 +927,11 @@ def _export_formatted_native(
         for c in bias_changes
     ]
 
-    if not _export_via_form_fields(doc, changes):
-        logger.info("No form fields found; falling back to text replacement")
-        _export_via_text_replacement(doc, changes)
+    if _export_via_form_fields(doc, changes):
+        return
+
+    logger.info("No form fields updated; using block-level replacement")
+    _replace_affected_blocks(doc, changes, page_texts)
 
 
 def _export_formatted_scanned(
@@ -743,17 +939,9 @@ def _export_formatted_scanned(
     original_pdf_path: str | Path,
     bias_changes: list[dict],
     entity_mapping: dict[str, str],
+    page_texts: list[str] | None = None,
 ) -> None:
-    """Apply bias corrections on a scanned PDF using OCR bounding boxes.
-
-    Converts each page to an image, runs OCR to get word-level bounding boxes
-    grouped into blocks, applies bias corrections per block, then whites out
-    the old text and overlays the corrected text.
-    """
-    import pytesseract
-    from pdf2image import convert_from_path
-    from pytesseract import Output
-
+    """Apply bias corrections on a scanned PDF using block-level replacement."""
     changes = [
         (
             unmask_phrase(c["original_phrase"], entity_mapping),
@@ -762,55 +950,7 @@ def _export_formatted_scanned(
         for c in bias_changes
     ]
 
-    dpi = 300
-    scale = 72.0 / dpi
-    images = convert_from_path(str(original_pdf_path), dpi=dpi)
-
-    for page_idx, image in enumerate(images):
-        if page_idx >= len(doc):
-            break
-        page = doc[page_idx]
-        ocr_data = pytesseract.image_to_data(image, output_type=Output.DICT)
-
-        # Group OCR words into blocks (Tesseract provides block_num)
-        blocks: dict[int, list[int]] = {}
-        for i in range(len(ocr_data["text"])):
-            if not ocr_data["text"][i].strip():
-                continue
-            blocks.setdefault(ocr_data["block_num"][i], []).append(i)
-
-        for bnum, indices in blocks.items():
-            block_text = " ".join(ocr_data["text"][i] for i in indices)
-
-            modified = block_text
-            has_changes = False
-            for original, replacement in changes:
-                if original in modified:
-                    modified = modified.replace(original, replacement)
-                    has_changes = True
-
-            if not has_changes:
-                continue
-
-            # Compute encompassing rectangle (pixel → PDF points)
-            px_left = min(ocr_data["left"][i] for i in indices)
-            px_top = min(ocr_data["top"][i] for i in indices)
-            px_right = max(ocr_data["left"][i] + ocr_data["width"][i] for i in indices)
-            px_bottom = max(ocr_data["top"][i] + ocr_data["height"][i] for i in indices)
-            rect = fitz.Rect(
-                px_left * scale, px_top * scale,
-                px_right * scale, px_bottom * scale,
-            )
-
-            avg_height = sum(ocr_data["height"][i] for i in indices) / len(indices)
-            fontsize = avg_height * scale * 0.85
-
-            page.draw_rect(rect, color=None, fill=(1, 1, 1))
-            page.insert_textbox(
-                rect, modified,
-                fontsize=fontsize, fontname="helv", color=(0, 0, 0),
-            )
-            logger.debug("Replaced OCR block %d on page %d", bnum, page_idx)
+    _replace_affected_blocks(doc, changes, page_texts)
 
 
 def _add_searchable_text_layer(doc: fitz.Document) -> None:
@@ -866,6 +1006,7 @@ def export_formatted_pdf(
     entity_mapping: dict[str, str],
     output_path: str | Path,
     is_scanned: bool = False,
+    page_texts: list[str] | None = None,
 ) -> Path:
     """Export a formatted PDF with bias corrections applied in-place.
 
@@ -886,9 +1027,13 @@ def export_formatted_pdf(
         return output_path
 
     if is_scanned:
-        _export_formatted_scanned(doc, original_pdf_path, bias_changes, entity_mapping)
+        _export_formatted_scanned(
+            doc, original_pdf_path, bias_changes, entity_mapping, page_texts=page_texts,
+        )
     else:
-        _export_formatted_native(doc, bias_changes, entity_mapping)
+        _export_formatted_native(
+            doc, bias_changes, entity_mapping, page_texts=page_texts,
+        )
 
     # Make non-searchable pages searchable via invisible OCR text layer
     _add_searchable_text_layer(doc)

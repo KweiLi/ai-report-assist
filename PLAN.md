@@ -25,19 +25,6 @@ Law enforcement reports can contain implicit biases that affect fairness and jus
 
 ## Technology Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Backend | FastAPI + Uvicorn | Async, fast, auto-generated API docs |
-| Frontend | Jinja2 templates + HTMX | Simple, no JS build step, server-rendered |
-| PDF (native) | PyMuPDF | Fast, reliable text extraction |
-| PDF (scanned/OCR) | pdf2image + pytesseract | Industry-standard OCR |
-| PII detection | Presidio Analyzer + spaCy `en_core_web_lg` | Best local PII detection, fully offline |
-| Custom entities | Presidio PatternRecognizer | Regex + context words for law enforcement entities |
-| Masking | Presidio Anonymizer | Token replacement with reversible mapping |
-| Unmasking | Presidio Deanonymizer | Restore original values from mapping |
-| AI debiasing | OpenAI API (GPT-4o) | High-quality bias analysis on masked text |
-| Export (DOCX) | python-docx | Native Word format |
-| Export (PDF) | fpdf2 | Simple, Unicode-friendly PDF generation |
 
 ---
 

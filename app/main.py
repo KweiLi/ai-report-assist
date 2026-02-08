@@ -86,6 +86,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "filename": file.filename,
         "file_path": str(file_path),
         "original_text": extraction.total_text,
+        "page_texts": [p.text for p in extraction.pages],
         "is_scanned": extraction.is_scanned,
         "pages": len(extraction.pages),
         "status": "extracted",
@@ -198,6 +199,7 @@ async def export_report(job_id: str, format: str = "pdf"):
             entity_mapping=job.get("entity_mapping", {}),
             output_path=output_path,
             is_scanned=job.get("is_scanned", False),
+            page_texts=job.get("page_texts"),
         )
         media_type = "application/pdf"
     elif format == "docx":
