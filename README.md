@@ -10,7 +10,7 @@ A privacy-first law enforcement report debiasing tool. Upload a police report PD
 | **Frontend** | Jinja2 templates, HTMX, vanilla CSS |
 | **PII Detection** | Presidio Analyzer + spaCy (`en_core_web_lg`) — runs entirely local |
 | **Custom Recognizers** | Badge numbers, case numbers, evidence IDs, license plates, weapon serials |
-| **AI Debiasing** | OpenAI GPT-4o (receives only masked text) |
+| **AI Debiasing** | OpenAI (receives only masked text) |
 | **PDF Processing** | PyMuPDF (fitz), pdf2image, Tesseract OCR, pytesseract |
 | **Export** | PyMuPDF (formatted PDF), fpdf2 (analysis PDF), python-docx (DOCX) |
 | **Environment** | Conda (tesseract + poppler as system deps) |
@@ -44,7 +44,7 @@ A privacy-first law enforcement report debiasing tool. Upload a police report PD
 2. **Extract** — PyMuPDF for native PDFs; Tesseract OCR for scanned documents
 3. **Analyze PII** — Presidio with spaCy NLP + custom law enforcement recognizers; preserves ~150 standard LE acronyms (BOLO, DUI, SWAT, etc.)
 4. **Mask** — Replace each PII entity with a typed token (`[PERSON_1]`, `[BADGE_NUM_1]`, etc.)
-5. **Debias** — Send masked text to GPT-4o with structured prompt; returns bias changes with categories (racial/ethnic, gender, socioeconomic, stereotyping, inflammatory, confirmation, subjective)
+5. **Debias** — Send masked text to GPT with structured prompt; returns bias changes with categories (racial/ethnic, gender, socioeconomic, stereotyping, inflammatory, confirmation, subjective)
 6. **Unmask** — Restore all tokens to original values
 7. **Review** — Side-by-side comparison with color-coded bias highlights
 8. **Export** — Three formats:
@@ -68,7 +68,7 @@ app/
 │   ├── extractor.py           # PDF text extraction (native + OCR)
 │   ├── analyzer.py            # PII detection via Presidio
 │   ├── masker.py              # PII masking (token replacement)
-│   ├── debiaser.py            # OpenAI GPT-4o bias correction
+│   ├── debiaser.py            # OpenAI GPT bias correction
 │   ├── unmasker.py            # Token-to-original restoration
 │   └── exporter.py            # PDF/DOCX export (formatted + analysis)
 └── recognizers/
@@ -110,5 +110,5 @@ Open http://localhost:8000 in your browser.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | (required) | OpenAI API key for GPT-4o debiasing |
+| `OPENAI_API_KEY` | (required) | OpenAI API key for GPT debiasing |
 | `PII_CONFIDENCE_THRESHOLD` | `0.55` | Minimum confidence for PII detection (0.0-1.0) |
