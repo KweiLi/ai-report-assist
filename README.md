@@ -22,7 +22,7 @@ A privacy-first law enforcement report debiasing tool. Upload a police report PD
  ┌─────────────────────────────────────┐        ┌──────────┐
  │  PDF ──► Extract ──► Analyze PII    │        │          │
  │                        │            │        │  OpenAI  │
- │              Mask (replace PII      │        │  GPT-4o  │
+ │              Mask (replace PII      │        │          │
  │              with tokens like       │ ──────►│          │
  │              [PERSON_1], [ADDR_1])  │ masked │          │
  │                                     │  text  │  Debias  │
@@ -111,5 +111,4 @@ Open http://localhost:8000 in your browser.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | (required) | OpenAI API key for GPT-4o debiasing |
-| `OPENAI_MODEL` | `gpt-4o` | OpenAI model to use |
 | `PII_CONFIDENCE_THRESHOLD` | `0.55` | Minimum confidence for PII detection (0.0-1.0) |
